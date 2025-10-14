@@ -1,11 +1,8 @@
 package itx.examples.springboot.redis.tests;
 
 import itx.examples.springboot.redis.model.MessageData;
-import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,17 +18,20 @@ import org.springframework.test.context.ContextConfiguration;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 @Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@TestMethodOrder(OrderAnnotation.class)
 @ContextConfiguration(initializers = RedisAppTests.Initializer.class)
 class RedisAppTests {
 
-    protected static final int DOCKER_EXPOSED_REDIS_PORT = 6379;
-    private static final String REDIS_DOCKER_IMAGE = "redis:6-alpine";
+    private static final Logger LOG = LoggerFactory.getLogger(RedisAppTests.class);
+
+    private static final int REDIS_PORT = 6379;
+    private static final String REDIS_IMAGE = "redis:6-alpine";
+    private static final String BASE_URL = "/services/data/messages";
+
     protected static GenericContainer<?> redisContainer;
     private static String messageId;
 
@@ -41,60 +41,88 @@ class RedisAppTests {
     @Test
     @Order(1)
     void testEmptyRepo() {
-        ResponseEntity<MessageData[]> responseEntity = restTemplate.getForEntity("/services/data/messages", MessageData[].class);
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertEquals(0, responseEntity.getBody().length);
+        LOG.info("Testing empty message repository...");
+        ResponseEntity<MessageData[]> response = restTemplate.getForEntity(BASE_URL, MessageData[].class);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(0, response.getBody().length);
     }
 
     @Test
     @Order(2)
-    void createMessages() {
-        ResponseEntity<MessageData> responseEntity = restTemplate.postForEntity("/services/data/messages/" + "hi-message", null, MessageData.class);
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody());
-        assertNotNull(responseEntity.getBody().getId());
-        assertEquals("hi-message", responseEntity.getBody().getMessage());
-        messageId = responseEntity.getBody().getId();
+    void createMessage() {
+        String testMessage = "hi-message";
 
-        ResponseEntity<MessageData[]> responsesEntity = restTemplate.getForEntity("/services/data/messages", MessageData[].class);
-        assertEquals(HttpStatus.OK, responsesEntity.getStatusCode());
-        assertEquals(1, responsesEntity.getBody().length);
+        LOG.info("Creating message: {}", testMessage);
+        ResponseEntity<MessageData> response = restTemplate.postForEntity(BASE_URL + "/" + testMessage, null, MessageData.class);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertNotNull(response.getBody().getId());
+        assertEquals(testMessage, response.getBody().getMessage());
+
+        messageId = response.getBody().getId();
+
+        // Confirm creation
+        ResponseEntity<MessageData[]> confirmResponse = restTemplate.getForEntity(BASE_URL, MessageData[].class);
+        assertEquals(HttpStatus.OK, confirmResponse.getStatusCode());
+        assertNotNull(confirmResponse.getBody());
+        assertEquals(1, confirmResponse.getBody().length);
     }
 
     @Test
     @Order(3)
-    void getMessage() {
-        ResponseEntity<MessageData> responseEntity = restTemplate.getForEntity("/services/data/messages/" + messageId, MessageData.class);
-        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
-        assertNotNull(responseEntity.getBody().getId());
-        assertEquals("hi-message", responseEntity.getBody().getMessage());
+    void getMessageById() {
+        LOG.info("Fetching message with ID: {}", messageId);
+        ResponseEntity<MessageData> response = restTemplate.getForEntity(BASE_URL + "/" + messageId, MessageData.class);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(messageId, response.getBody().getId());
+        assertEquals("hi-message", response.getBody().getMessage());
     }
 
     @Test
     @Order(4)
     void deleteMessage() {
-        restTemplate.delete("/services/data/messages/" + messageId);
-        ResponseEntity<MessageData[]> responsesEntity = restTemplate.getForEntity("/services/data/messages", MessageData[].class);
-        assertEquals(HttpStatus.OK, responsesEntity.getStatusCode());
-        assertEquals(0, responsesEntity.getBody().length);
+        LOG.info("Deleting message with ID: {}", messageId);
+        restTemplate.delete(BASE_URL + "/" + messageId);
+
+        // Confirm deletion
+        ResponseEntity<MessageData[]> response = restTemplate.getForEntity(BASE_URL, MessageData[].class);
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertEquals(0, response.getBody().length);
     }
 
+    /**
+     * Testcontainers initializer to start Redis container and inject its properties into the Spring context.
+     */
     public static class Initializer implements ApplicationContextInitializer<ConfigurableApplicationContext> {
-        private final Logger LOGGER = LoggerFactory.getLogger(RedisAppTests.class);
-        static GenericContainer<?> redisContainer = new GenericContainer<>(REDIS_DOCKER_IMAGE)
-                .withExposedPorts(DOCKER_EXPOSED_REDIS_PORT)
+
+        private static final Logger LOGGER = LoggerFactory.getLogger(Initializer.class);
+
+        static GenericContainer<?> container = new GenericContainer<>(REDIS_IMAGE)
+                .withExposedPorts(REDIS_PORT)
                 .withReuse(true);
+
         @Override
         public void initialize(@NonNull ConfigurableApplicationContext context) {
-            redisContainer.start();
-            Assertions.assertTrue(redisContainer.isRunning());
-            RedisAppTests.redisContainer = redisContainer;
-            LOGGER.info("REDIS     : {}:{}", redisContainer.getContainerIpAddress(), redisContainer.getMappedPort(DOCKER_EXPOSED_REDIS_PORT));
+            container.start();
+            Assertions.assertTrue(container.isRunning(), "Redis container failed to start!");
+
+            redisContainer = container;
+
+            String redisHost = container.getHost();
+            Integer redisMappedPort = container.getMappedPort(REDIS_PORT);
+
+            LOGGER.info("REDIS running at {}:{}", redisHost, redisMappedPort);
+
             TestPropertyValues.of(
-                    "spring.redis.host=" + redisContainer.getContainerIpAddress(),
-                    "spring.redis.port=" + redisContainer.getMappedPort(DOCKER_EXPOSED_REDIS_PORT)
+                    "spring.redis.host=" + redisHost,
+                    "spring.redis.port=" + redisMappedPort
             ).applyTo(context.getEnvironment());
         }
     }
-
 }
