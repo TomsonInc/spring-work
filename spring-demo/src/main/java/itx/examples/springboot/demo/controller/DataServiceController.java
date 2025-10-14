@@ -18,23 +18,13 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
@@ -42,87 +32,103 @@ import java.util.stream.Collectors;
 public class DataServiceController {
 
     private static final Logger LOG = LoggerFactory.getLogger(DataServiceController.class);
-
     private final ApplicationConfig applicationConfig;
     private final BuildProperties buildProperties;
 
-    public DataServiceController(@Autowired ApplicationConfig applicationConfig,
-                                 @Autowired(required = false) BuildProperties buildProperties) {
+    @Autowired
+    public DataServiceController(ApplicationConfig applicationConfig, BuildProperties buildProperties) {
         this.applicationConfig = applicationConfig;
         this.buildProperties = buildProperties;
     }
 
-    @GetMapping(path = "/build-info", produces = MediaType.APPLICATION_JSON_VALUE )
+    @GetMapping(path = "/build-info", produces = MediaType.APPLICATION_JSON_VALUE)
     public BuildInfo getBuildInfo() {
-        LOG.info("getBuildInfo:");
+        LOG.info("Fetching build information.");
         if (buildProperties != null) {
-            LOG.info("getBuildInfo: {}", buildProperties.get("gitversion"));
-            return new BuildInfo(buildProperties.getTime().toString(),
+            LOG.info("Git Version: {}", buildProperties.get("gitversion"));
+            return new BuildInfo(
+                    buildProperties.getTime().toString(),
                     buildProperties.getVersion(),
                     buildProperties.getName(),
                     buildProperties.getArtifact(),
                     buildProperties.getGroup(),
                     buildProperties.get("gitfullhash"),
-                    buildProperties.get("gitbranchname"));
-        } else {
-            return new BuildInfo("", "", "", "", "", "", "");
+                    buildProperties.get("gitbranchname")
+            );
         }
+        return new BuildInfo("", "", "", "", "", "", "");
     }
 
-    @GetMapping(path = "/info", produces = MediaType.APPLICATION_JSON_VALUE )
+    @GetMapping(path = "/info", produces = MediaType.APPLICATION_JSON_VALUE)
     public SystemInfo getSystemInfo() {
-        LOG.info("getSystemInfo:");
-        return new SystemInfo(applicationConfig.getId(),  "spring-demo", "1.0.0", System.currentTimeMillis());
+        LOG.info("Fetching system information.");
+        return new SystemInfo(applicationConfig.getId(), "spring-demo", "1.0.0", System.currentTimeMillis());
     }
 
-    @PostMapping(path = "/message", consumes = MediaType.APPLICATION_JSON_VALUE )
+    @PostMapping(path = "/message", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<DataMessage> getDataMessage(@RequestBody DataMessage dataMessage) {
-        LOG.info("getDataMessage: {}", dataMessage.getData());
+        LOG.info("Received message: {}", dataMessage.getData());
         DataMessage responseMessage = new DataMessage(dataMessage.getData());
-        HttpHeaders responseHeaders = new HttpHeaders();
-        responseHeaders.setContentType(MediaType.APPLICATION_JSON);
-        return new ResponseEntity<>(responseMessage, responseHeaders, HttpStatus.OK);
+        return buildJsonResponse(responseMessage);
     }
 
-    @GetMapping(path = "/echo/{message}", produces = MediaType.APPLICATION_JSON_VALUE )
+    @GetMapping(path = "/echo/{message}", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<DataMessage> getEcho(@PathVariable String message) {
-        LOG.info("getEcho: {}", message);
+        LOG.info("Echoing message: {}", message);
         DataMessage responseMessage = new DataMessage(message);
-        return new ResponseEntity<>(responseMessage, HttpStatus.OK);
+        return buildJsonResponse(responseMessage);
     }
 
     @PostMapping(path = "/generics", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public GenericResponse<? extends DataMarker> getGenericResponse(@RequestBody GenericRequest<? extends DataMarker> request) {
-        LOG.info("getGenericResponse");
-        if (request.getData() instanceof SimpleDataPayload) {
-            SimpleDataPayload payload = (SimpleDataPayload) request.getData();
-            return new GenericResponse<>(request.getName(), payload);
-        } else if (request.getData() instanceof ComplexDataPayload) {
-            ComplexDataPayload payload = (ComplexDataPayload) request.getData();
-            return new GenericResponse<>(request.getName(), payload);
-        } else {
-            throw new UnsupportedOperationException("Unsupported type");
-        }
+        LOG.info("Received generic request.");
+        return processGenericRequest(request);
     }
 
     @RequestMapping(path = "/test", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RequestInfo> getRequestParameters(HttpServletRequest request) throws IOException {
-        LOG.info("getRequestParameters: {}?{}", request.getRequestURL(), request.getQueryString());
+        LOG.info("Fetching request parameters: {}?{}", request.getRequestURL(), request.getQueryString());
         String body = request.getReader().lines().collect(Collectors.joining());
-        RequestInfo requestInfo = new RequestInfo(applicationConfig.getId(), request.getRequestURL().toString(),
-                request.getQueryString(), body, request.getCharacterEncoding(), request.getMethod(),
-                createCookiesMap(request.getCookies()), request.getContentType(),  createHeaderMap(request),
-                request.getProtocol(), createRemoteInfo(request));
+        RequestInfo requestInfo = new RequestInfo(
+                applicationConfig.getId(),
+                request.getRequestURL().toString(),
+                request.getQueryString(),
+                body,
+                request.getCharacterEncoding(),
+                request.getMethod(),
+                createCookiesMap(request.getCookies()),
+                request.getContentType(),
+                createHeaderMap(request),
+                request.getProtocol(),
+                createRemoteInfo(request)
+        );
         return ResponseEntity.ok(requestInfo);
     }
 
+    // Helper Methods
+
+    private <T> ResponseEntity<T> buildJsonResponse(T responseBody) {
+        HttpHeaders responseHeaders = new HttpHeaders();
+        responseHeaders.setContentType(MediaType.APPLICATION_JSON);
+        return new ResponseEntity<>(responseBody, responseHeaders, HttpStatus.OK);
+    }
+
+    private GenericResponse<? extends DataMarker> processGenericRequest(GenericRequest<? extends DataMarker> request) {
+        if (request.getData() instanceof SimpleDataPayload) {
+            return new GenericResponse<>(request.getName(), request.getData());
+        } else if (request.getData() instanceof ComplexDataPayload) {
+            return new GenericResponse<>(request.getName(), request.getData());
+        } else {
+            throw new UnsupportedOperationException("Unsupported data type in request.");
+        }
+    }
+
     private Map<String, String> createCookiesMap(Cookie[] cookies) {
+        if (cookies == null) return Collections.emptyMap();
+
         Map<String, String> cookiesMap = new HashMap<>();
-        if (cookies != null) {
-            for (Cookie cookie : cookies) {
-                String id = cookie.getDomain() + ":" + cookie.getName();
-                cookiesMap.put(id, cookie.toString());
-            }
+        for (Cookie cookie : cookies) {
+            cookiesMap.put(cookie.getDomain() + ":" + cookie.getName(), cookie.toString());
         }
         return cookiesMap;
     }
@@ -130,16 +136,11 @@ public class DataServiceController {
     private Map<String, List<String>> createHeaderMap(HttpServletRequest request) {
         Map<String, List<String>> headers = new HashMap<>();
         Enumeration<String> headerNames = request.getHeaderNames();
-        if (headerNames != null) {
-            while (headerNames.hasMoreElements()) {
-                List<String> headerValues = new ArrayList<>();
-                String headerName = headerNames.nextElement();
-                Enumeration<String> values = request.getHeaders(headerName);
-                while (values.hasMoreElements()) {
-                    headerValues.add(values.nextElement());
-                }
-                headers.put(headerName, headerValues);
-            }
+        while (headerNames.hasMoreElements()) {
+            String headerName = headerNames.nextElement();
+            Enumeration<String> headerValues = request.getHeaders(headerName);
+            List<String> valuesList = Collections.list(headerValues);
+            headers.put(headerName, valuesList);
         }
         return headers;
     }
@@ -147,5 +148,4 @@ public class DataServiceController {
     private String createRemoteInfo(HttpServletRequest request) {
         return request.getRemoteHost() + ":" + request.getRemotePort();
     }
-
 }
